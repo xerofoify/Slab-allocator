@@ -1,8 +1,8 @@
 #include "slab.h"
 #include "buddy.h"
-
 #include <mutex>
 #include <cstring>
+#include <string.h>
 #include <iostream>
 using namespace std;
 
@@ -19,6 +19,7 @@ typedef struct slab_s {
 	slab_s*					next;						// next slab in chain
 	slab_s*					prev;						// previous slab in chain
 	kmem_cache_t*			myCache;					// cache - owner
+	mutex buddy_mutex;		// guarding buddy alocator
 } slab_t;
 
 
@@ -34,6 +35,7 @@ struct kmem_cache_s {
 	unsigned long           num_active;					// num of active objects in cache
 	unsigned long           num_allocations;			// num of total objects in cache
 	mutex					cache_mutex;				// mutex (uses to lock the cache)
+	mutex buddy_mutex;		// guarding buddy alocator
 	unsigned int			order;						// order of one slab (one slab has 2^order blocks)
 	unsigned int            colour_max;					// maximum multiplier for offset of first object in slab
     unsigned int            colour_next;				// multiplier for next slab offset
@@ -58,7 +60,6 @@ ERROR CODES: (error_cod value)
 
 */
 
-mutex buddy_mutex;		// guarding buddy alocator
 mutex cout_mutex;		// guarding cout
 
 static kmem_cache_t cache_cache;
@@ -93,7 +94,7 @@ void kmem_init(void *space, int block_num)
 	cache_cache.slabs_full = nullptr;
 	cache_cache.slabs_partial = nullptr;
 
-	strcpy_s(cache_cache.name, "kmem_cache");
+	strcpy(cache_cache.name, "kmem_cache");
 	cache_cache.objectSize = sizeof(kmem_cache_t);
 	cache_cache.order = CACHE_CACHE_ORDER;
 
@@ -219,7 +220,7 @@ kmem_cache_t* kmem_cache_create(const char *name, size_t size, void(*ctor)(void 
 
 	if (s == nullptr)	// there is not enough space, try to allocate more space for cache_cache
 	{
-		lock_guard<mutex> guard(buddy_mutex);
+		lock_guard<mutex> guard(s->buddy_mutex);
 		void* ptr = buddy_alloc(CACHE_CACHE_ORDER);
 		if (ptr == nullptr)
 		{
@@ -302,7 +303,7 @@ kmem_cache_t* kmem_cache_create(const char *name, size_t size, void(*ctor)(void 
 	
 
 	// initialise new cache
-	strcpy_s(ret->name, name);
+	strcpy(ret->name, name);
 
 	ret->slabs_full = nullptr;
 	ret->slabs_partial = nullptr;
@@ -365,7 +366,7 @@ int kmem_cache_shrink(kmem_cache_t *cachep) // Shrink cache
 	cachep->error_code = 0;
 	if (cachep->slabs_free!=nullptr && cachep->growing==false)	// if there is any slab in slab_free list and growing==false 
 	{
-		lock_guard<mutex> guard(buddy_mutex);
+		lock_guard<mutex> guard(cachep->buddy_mutex);
 		int n = 1 << cachep->order;
 		slab_t* s;
 		while (cachep->slabs_free != nullptr)
@@ -401,7 +402,7 @@ void *kmem_cache_alloc(kmem_cache_t *cachep) // Allocate one object from cache
 		s = cachep->slabs_free;
 	if (s == nullptr)	// alloc new slab
 	{
-		lock_guard<mutex> guard(buddy_mutex);
+		lock_guard<mutex> guard(s->buddy_mutex);
 
 		void* ptr = buddy_alloc(cachep->order);
 		if (ptr == nullptr)
@@ -636,9 +637,9 @@ void *kmalloc(size_t size) // Alloacate one small memory buffer
 	void* buff = nullptr;
 
 	char name[20];
-	strcpy_s(name, "size-");
-	sprintf_s(num, "%d", j);
-	strcat_s(name, num);
+	strcpy(name, "size-");
+	sprintf(num, "%d", j);
+	strcat(name, num);
 
 	kmem_cache_t* buffCachep = kmem_cache_create(name, j, nullptr, nullptr);
 
@@ -716,7 +717,7 @@ void kmem_cache_destroy(kmem_cache_t *cachep) // Deallocate cache
 
 	lock_guard<mutex> guard1(cachep->cache_mutex);
 	lock_guard<mutex> guard2(cache_cache.cache_mutex);
-	lock_guard<mutex> guard3(buddy_mutex);
+	lock_guard<mutex> guard3(cachep->buddy_mutex);
 
 
 	slab_t* s;
