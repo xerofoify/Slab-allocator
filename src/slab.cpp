@@ -402,8 +402,8 @@ void *kmem_cache_alloc(kmem_cache_t *cachep) // Allocate one object from cache
 		s = cachep->slabs_free;
 	if (s == nullptr)	// alloc new slab
 	{
-		lock_guard<mutex> guard(s->buddy_mutex);
-
+		mutex allocator;
+		lock_guard<mutex> guard(allocator);
 		void* ptr = buddy_alloc(cachep->order);
 		if (ptr == nullptr)
 		{
